@@ -181,30 +181,18 @@ func (s *stateDriver) GetWatchSources(mgr ctrlManager) map[string]SyncingSource 
 func (s *stateDriver) cleanupStaleDriverDaemonsets(ctx context.Context, cr *nvidiav1alpha1.NVIDIADriver) error {
 	logger := log.FromContext(ctx)
 	logger.V(consts.LogLevelInfo).Info("Cleaning up stale driver DaemonSets")
-
-	// List all DaemonSets owned by the CR instance
-	list := &appsv1.DaemonSetList{}
-	err := s.client.List(ctx, list, client.MatchingFields{consts.NVIDIADriverControllerIndexKey: cr.Name})
-	if err != nil {
-		return fmt.Errorf("failed to list all NVIDIA driver DaemonSets owned by NVIDIADriver instance: %w", err)
-	}
-
-	for _, ds := range list.Items {
-		ds := ds
-		// We consider a daemonset to be stale only if it has no desired number of pods and no pods currently mis-scheduled
-		// As per the Kubernetes docs, a daemonset pod is mis-scheduled when an already scheduled pod no longer satisfies
-		// node affinity constraints or has un-tolerated taints, for e.g. "node.kubernetes.io/unreachable:NoSchedule"
-		if ds.Status.DesiredNumberScheduled == 0 && ds.Status.NumberMisscheduled == 0 {
-			logger.V(consts.LogLevelInfo).Info("Deleting inactive driver DaemonSet", "Name", ds.Name)
-			err = s.client.Delete(ctx, &ds)
-			if err != nil {
-				return fmt.Errorf("error deleting DaemonSet '%s': %w", ds.Name, err)
-			}
-			continue
-		}
+	// We consider a daemonset to be stale only if it has no desired number of pods and no pods currently mis-scheduled
+	// As per the Kubernetes docs, a daemonset pod is mis-scheduled when an already scheduled pod no longer satisfies
+	// node affinity constraints or has un-tolerated taints, for e.g. "node.kubernetes.io/unreachable:NoSchedule"
+	if err := s.client.DeleteAllOf(ctx, &appsv1.DaemonSet{},
+		client.MatchingFields{consts.NVIDIADriverControllerIndexKey: cr.Name},
 		// TODO: cleanup precompiled / non-precompiled DaemonSets if spec.usePrecompiled is toggled.
 		// TODO: cleanup DaemonSets of a particular type if spec.driverType is toggled.
+		client.MatchingFields{"status.desiredNumberScheduled": "0"},
+		client.MatchingFields{"status.numberMisscheduled": "0"}); err != nil {
+		return fmt.Errorf("failed to cleanup stale driver DaemonSets: %w", err)
 	}
+
 	return nil
 }
 
